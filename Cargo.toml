@@ -1,0 +1,10 @@
+[package]
+name = "rplugin"
+version = "0.0.1"
+edition = "2021"
+
+[features]
+default = []
+delay   = [] # sleep for 1 second on backup/restore
+linger  = [] # linger for 5 seconds
+logs    = [] # log args to stderr
