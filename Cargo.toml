@@ -5,6 +5,7 @@ edition = "2021"
 
 [features]
 default = []
+fail    = [] # small chance to fail
 delay   = [] # sleep for 1 second on backup/restore
-linger  = [] # linger for 5 seconds
+linger  = [] # linger for 2 seconds
 logs    = [] # log args to stderr

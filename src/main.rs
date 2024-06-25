@@ -5,7 +5,9 @@ use std::fs::{create_dir_all, remove_dir_all, File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::thread::sleep;
 use std::time::Duration;
+use std::time::SystemTime;
 
 type Fail = Result<(), String>;
 type FailOr<T> = Result<T, String>;
@@ -21,7 +23,7 @@ fn split_daydir_dir_file(p: &str) -> FailOr<(String, String, String)>
   let file_dir = path.parent()
                      .and_then(|d| d.file_name())
                      .ok_or("invalid local path for dirname".to_string())?;
-  let dirname = file_dir.to_str().expect("dir is valid unicode");
+  let dirname = file_dir.to_str().expect("dirname is valid unicode");
   let daydirname = if dirname.len() >= 8 {
     &dirname[..8]
   } else {
@@ -40,9 +42,25 @@ fn split_daydir_dir(p: &str) -> FailOr<(String, String)>
   let day_dir_path = path.parent()
                          .and_then(|p| p.file_name())
                          .ok_or("invalid local path for dirname".to_string())?;
-  let daydirname = day_dir_path.to_str().expect("dirname is valid unicode");
+  let daydirname = day_dir_path.to_str().expect("daydirname is valid unicode");
   log(format!("dir split: {daydirname}, {dirname}"));
   Ok((daydirname.into(), dirname.into()))
+}
+
+fn rand() -> bool
+{
+  let e = SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                           .expect("time went backwards")
+                           .as_nanos();
+  (e & 31) == 31
+}
+
+fn randomly_fail() -> Fail
+{
+  if cfg!(feature = "fail") && rand() {
+    return Err("fail triggered".to_string());
+  }
+  Ok(())
 }
 
 fn log<T: AsRef<str>>(s: T)
@@ -82,7 +100,8 @@ fn cleanup_plugin_for_restore(mut args: Args) -> Fail
 fn backup_file(mut args: Args) -> Fail
 {
   #[cfg(feature = "delay")]
-  std::thread::sleep(Duration::from_secs(1));
+  sleep(Duration::from_secs(1));
+  randomly_fail()?;
   let local_path = args.nth(1);
   if let Some(local_path) = local_path {
     let (daydirname, dirname, filename) = split_daydir_dir_file(&local_path)?;
@@ -109,17 +128,17 @@ fn backup_file(mut args: Args) -> Fail
 fn restore_file(mut args: Args) -> Fail
 {
   #[cfg(feature = "delay")]
-  std::thread::sleep(Duration::from_secs(1));
+  sleep(Duration::from_secs(1));
+  randomly_fail()?;
   let local_path = args.nth(1);
   if let Some(local_path) = local_path {
     let (daydirname, dirname, filename) = split_daydir_dir_file(&local_path)?;
     let mut restore_file =
       File::open(format!("{PLUGIN_DIR}/{daydirname}/{dirname}/{filename}"))
-        .map_err(|err| format!("could not create backup file: {err}"))?;
+        .map_err(|err| format!("could not open backup file: {err}"))?;
     let mut local_file = File::create(local_path).map_err(|err| {
-                           format!("could not open local file: {err}")
+                           format!("could not create local file: {err}")
                          })?;
-
     let mut restore_data = vec![];
     restore_file.read_to_end(&mut restore_data)
                 .map_err(|err| format!("could not read restore file: {err}"))?;
@@ -136,7 +155,8 @@ fn restore_file(mut args: Args) -> Fail
 fn backup_data(mut args: Args) -> Fail
 {
   #[cfg(feature = "delay")]
-  std::thread::sleep(Duration::from_secs(1));
+  sleep(Duration::from_secs(1));
+  randomly_fail()?;
   let local_path = args.nth(1);
   if let Some(local_path) = local_path {
     let (daydirname, dirname, filename) = split_daydir_dir_file(&local_path)?;
@@ -152,9 +172,12 @@ fn backup_data(mut args: Args) -> Fail
       if count == 0 {
         break;
       }
-      backup_file.write(&b[..count])
-                 .map_err(|err| format!("could write data to backup file: {err}"))?;
+      backup_file.write_all(&b[..count])
+                 .map_err(|err| format!("could not write data to backup file: {err}"))?;
     }
+    backup_file.flush().map_err(|err| {
+                          format!("could not flush a backup file: {err}")
+                        })?;
     Ok(())
   } else {
     Err("no local path is provided".to_string())
@@ -164,24 +187,26 @@ fn backup_data(mut args: Args) -> Fail
 fn restore_data(mut args: Args) -> Fail
 {
   #[cfg(feature = "delay")]
-  std::thread::sleep(Duration::from_secs(1));
+  sleep(Duration::from_secs(1));
+  randomly_fail()?;
   let local_path = args.nth(1);
   if let Some(local_path) = local_path {
     let (daydirname, dirname, filename) = split_daydir_dir_file(&local_path)?;
     let mut stdout = std::io::stdout();
     let mut restore_file =
       File::open(format!("{PLUGIN_DIR}/{daydirname}/{dirname}/{filename}"))
-        .map_err(|err| format!("could not create backup file: {err}"))?;
+        .map_err(|err| format!("could not create restore file: {err}"))?;
     loop {
       let mut b = [0; 1024];
       let count = restore_file.read(&mut b)
-        .map_err(|err| format!("could read from backup file: {err}"))?;
+        .map_err(|err| format!("could not read from restore file: {err}"))?;
       if count == 0 {
         break;
       }
-      stdout.write(&b[..count])
-            .map_err(|err| format!("could write data to stdout: {err}"))?;
+      stdout.write_all(&b[..count])
+            .map_err(|err| format!("could not write data to stdout: {err}"))?;
     }
+    stdout.flush().map_err(|err| format!("could not flush stdout: {err}"))?;
     Ok(())
   } else {
     Err("no local path is provided".to_string())
@@ -206,7 +231,7 @@ fn delete_backup(mut args: Args) -> Fail
       .map_err(|err| format!("could not delete backup: {err}"))?;
     Ok(())
   } else {
-    Err("no local path is provided".to_string())
+    Err("no timestamp is provided".to_string())
   }
 }
 
@@ -253,6 +278,6 @@ fn main() -> ExitCode
     Ok(()) => ret = ExitCode::SUCCESS,
   }
   #[cfg(feature = "linger")]
-  std::thread::sleep(Duration::from_secs(5));
+  sleep(Duration::from_secs(2));
   ret
 }
